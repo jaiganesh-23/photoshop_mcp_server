@@ -43,12 +43,14 @@ def create_server(
         If there are background layers, convert them to a normal layer before running tools.
         3. Whenever a background layer is converted to a normal layer, its name changes to a new name.
         Check it up using get_layers_info tool and apply correct name on further operations.
-        4. When tools like region_generative_fill are used, a new document is created and 
+        4. When using generative fill use generative_fill_without_region tool if no selection is made / 
+        region is unknown and If a selection is made, use region_generative_fill tool.
+        5. When tools like region_generative_fill are used, a new document is created and 
         added in the documents list. Always set the newly created document as the active document before
         proceding with any further operations. Whenever a opertion creates a new document, it should
         set that new document as the active document.
-        5. Always clarify what and how to use the tools and resources provided by the MCP server.
-        6. Run photoshop_generative_expand only once. Dont run it twice unnecessarily.
+        6. Always clarify what and how to use the tools and resources provided by the MCP server.
+        7. Run photoshop_generative_expand only once. Dont run it twice unnecessarily.
     """
     server_mcp = FastMCP(name=name, description=description, instructions=instructions)
 

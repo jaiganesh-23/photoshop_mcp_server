@@ -898,19 +898,15 @@ def register(mcp):
     tool_name = register_tool(mcp, region_generative_fill, "region_generative_fill")
     registered_tools.append(tool_name)
 
-    def detect_region_generative_fill(
-        detection_prompt: str,
-        inpaint_prompt: str
+    def generative_fill_without_region(
+        change_prompt: str,
     ) -> dict:
         """
-        Detect a region in the current Photoshop document using OWLViT and a detection prompt,
-        segment with SAM2, and inpaint the detected region using Flux.
-        The inpainting prompt is constructed using an LLM chain as in region_generative_fill.
+        Given a change prompt the change is applied with inpainting the region to be changed
+        using flux inpainting model.
 
         Args:
-            detection_prompt (str): Description of the region to detect.
-            inpaint_prompt (str): Edit to be made in the detected region.
-
+            change_prompt (str): Text prompt describing the change to be made in the image.
         Returns:
             dict: Result of the operation.
         """
@@ -930,217 +926,24 @@ def register(mcp):
                 "success": False,
                 "error": f"Failed to export PSD as image: {e}"
             }
+        
+        image = Image.open(temp_img_path).convert("RGB")
+        W, H = image.size
 
-        # 2. Run OWLViT detection
+        # Inpaint with Hugging Face API
         try:
-            processor = OwlViTProcessor.from_pretrained("google/owlvit-large-patch14")
-            model = OwlViTForObjectDetection.from_pretrained("google/owlvit-large-patch14")
-            model.eval()
-
-            image = Image.open(temp_img_path).convert("RGB")
-            W, H = image.size
-            inputs = processor(text=[detection_prompt], images=image, return_tensors="pt", padding=True)
-            with torch.no_grad():
-                outputs = model(**inputs)
-            target_sizes = torch.tensor([image.size[::-1]])
-            results = processor.post_process_object_detection(
-                outputs, threshold=0.20, target_sizes=target_sizes
-            )[0]
-            boxes = results["boxes"].cpu().numpy()
-            scores = results["scores"].cpu().numpy()
-
-            if len(boxes) == 0:
-                return {"success": False, "error": "No region detected for the given prompt."}
-
-            # Use the best box (highest score)
-            best_idx = np.argmax(scores)
-            best_box = boxes[best_idx]
-        except Exception as e:
-            return {
-                "success": False,
-                "error": f"OWLViT detection failed: {e}"
-            }
-
-        # 3. Segment with SAM2
-        try:
-            sam2_ckpt = str(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../Grounded-SAM-2/checkpoints/sam2.1_hiera_large.pt")))
-            sam2_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            sam2_model = build_sam2(config_file=sam2_cfg, ckpt_path=sam2_ckpt, device=device)
-            sam2_predictor = SAM2ImagePredictor(sam2_model)
-            img_np = np.array(image)
-            sam2_predictor.set_image(img_np)
-
-            masks, mask_scores, logits = sam2_predictor.predict(
-                point_coords=None,
-                point_labels=None,
-                box=np.expand_dims(best_box, axis=0),
-                multimask_output=False,
-            )
-            if masks.ndim == 4:
-                masks = masks.squeeze(1)
-            best_mask = masks[0].astype(np.uint8) * 255
-        except Exception as e:
-            return {
-                "success": False,
-                "error": f"SAM2 segmentation failed: {e}"
-            }
-
-        # 4. Prepare mask as polygon for prompt construction (optional, not needed for inpainting)
-        # 5. Prepare base64 for image and mask
-        def pil_to_base64(img):
-            img = img.resize((300, 300))
-            buffered = BytesIO()
-            img.save(buffered, format="PNG")
-            return base64.b64encode(buffered.getvalue()).decode("utf-8")
-
-        mask_pil = Image.fromarray(best_mask).convert("L")
-        image_b64 = pil_to_base64(image)
-        mask_b64 = pil_to_base64(mask_pil)
-
-        # 6. Construct full prompt using LLM chain (like region_generative_fill)
-        try:
-            prompt_template = f"""
-            You are an expert Photoshop assistant. Given an image (base64 PNG), 
-            a mask (base64 PNG, white region is the area to edit), and an inpaint prompt, 
-            generate a detailed, context-aware prompt for a generative fill model. 
-            The inpaint prompt describes the change to be made in the masked region.
-            White region in the mask indicates the area to be edited,
-            while the black region indicates the area to be left unchanged.
-            The prompt should describe what should appear in the final generated image 
-            with simple words. Give the complete description of the image without treating 
-            the masked region separately, but rather as part of the whole image context.
-            Compare where and what the white pixels in the mask represents in the image and process the
-            information carefully along with the inpaint prompt to generate the full prompt. Do not
-            misinterpret the mask, image and the inpaint prompt. Dont confuse the white pixels in the 
-            image as the region to be edited, they are just part of the image. Do not add unnecessary details
-            in the prompt, just describe the image as it is with the changes specified in the inpaint prompt(for ex:
-            when a sun is told to be added, dont mention clouds,sky in the prompt if they are not present in the original image).
-
-            Examples:
-            ---
-            image: <base64:...>
-            mask: <base64:...>
-            inpaint_prompt: "add a sun in the selected region"
-            full_prompt: "A man with green shirt in the center. A sun in the top left corner."
-            ---
-            image: <base64:...>
-            mask: <base64:...>
-            inpaint_prompt: "replace the cat with a dog"
-            full_prompt: "A living room with a brown sofa. A dog sitting on the sofa."
-            ---
-            image: <base64:...>
-            mask: <base64:...>
-            inpaint_prompt: "remove the tree"
-            full_prompt: "A mountain landscape with a clear sky and no tree in the foreground."
-            ---
-            image: <base64:...>
-            mask: <base64:...>
-            inpaint_prompt: "add a red car"
-            full_prompt: "A city street with buildings on both sides. A red car parked on the right side."
-            ---
-            image: <base64:...>
-            mask: <base64:...>
-            inpaint_prompt: "change the sky to sunset"
-            full_prompt: "A beach with palm trees. The sky is orange and pink with a sunset."
-            ---
-            image: <base64:...>
-            mask: <base64:...>
-            inpaint_prompt: "add a person riding a bicycle"
-            full_prompt: "A park with green grass and trees. A person riding a bicycle on the path."
-            ---
-            image: <base64:...>
-            mask: <base64:...>
-            inpaint_prompt: "make the house blue"
-            full_prompt: "A suburban street with a blue house and a white fence."
-            ---
-            image: <base64:...>
-            mask: <base64:...>
-            inpaint_prompt: "add a flock of birds in the sky"
-            full_prompt: "A lake surrounded by mountains. A flock of birds flying in the sky."
-            ---
-            image: <base64:...>
-            mask: <base64:...>
-            inpaint_prompt: "remove the person from the bench"
-            full_prompt: "A park with a wooden bench under a tree. The bench is empty."
-            ---
-            image: <base64:...>
-            mask: <base64:...>
-            inpaint_prompt: "add a rainbow over the waterfall"
-            full_prompt: "A waterfall in a forest. A rainbow arches over the waterfall."
-            ---
-
-            Your turn:
-            Write only the full prompt and nothing else like above examples. The above examples uses blank base64 images and masks, but give 
-            your answer according to the image and mask provided below, dont add unnecessary details in the prompt.
-
-            full_prompt:
-            """
-
-            messages = [
-                (
-                    "user",
-                    [
-                        {"type": "text", "text": prompt_template},
-                        {"type": "text", "text": "image:"},
-                        {"type": "image_url", "image_url": f"data:image/png;base64,{image_b64}"},
-                        {"type": "text", "text": "mask:"},
-                        {"type": "image_url", "image_url": f"data:image/png;base64,{mask_b64}"},
-                        {"type": "text", "text": f"inpaint_prompt: {inpaint_prompt}"}
-                    ]
-                )
-            ]
-            prompt = ChatPromptTemplate.from_messages(messages)
-            chat = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct", temperature=0, api_key=os.getenv("GROQ_API_KEY"))
-            chain = prompt | chat
-            response = chain.invoke(
-                {
-                    "image_b64": image_b64,
-                    "mask_b64": mask_b64,
-                    "inpaint_prompt": inpaint_prompt
-                }
-            )
-
-            # Extract the full prompt from the response
-            logger.info(f"LLM response: {response.content}")
-            full_prompt = response.content.strip()
-            if full_prompt.startswith('"') and full_prompt.endswith('"'):
-                full_prompt = full_prompt[1:-1]
-        except Exception as e:
-            # If LLM fails, fallback to original prompt
-            logger.error(f"LLM failed: {e}")
-            full_prompt = inpaint_prompt
-
-        # 7. Inpaint with Hugging Face API
-        try:
-            client = Client("ameerazam08/FLUX.1-dev-Inpainting-Model-Beta-GPU")
-            mask = Image.fromarray(best_mask).convert("L")
-            # Save mask as PNG in temp_dir
-            mask_path = os.path.join(temp_dir, "ps_mask_for_detect_inpaint.png")
-            mask.save(mask_path)
-
-            # Create a new image: copy of original, but white where mask is white
-            combined = image.copy()
-            mask_np = np.array(mask)
-            combined_np = np.array(combined)
-            white = np.ones_like(combined_np) * 255
-            combined_np[mask_np == 255] = white[mask_np == 255]
-            combined_img = Image.fromarray(combined_np)
-            combined_path = os.path.join(temp_dir, "ps_combined_for_detect_inpaint.png")
-            combined_img.save(combined_path)
-
+            client = Client("black-forest-labs/FLUX.1-Kontext-Dev", hf_token=os.getenv("HF_TOKEN"))
             response = client.predict(
-                input_image_editor={"background":handle_file(str(temp_img_path).replace("\\","/")),"layers":[handle_file(str(mask_path).replace("\\","/"))],"composite":handle_file(str(combined_path).replace("\\","/"))},
-                prompt=full_prompt,
-                negative_prompt="",
-                controlnet_conditioning_scale=0.9,
-                guidance_scale=3.5,
-                seed=124,
-                num_inference_steps=24,
-                true_guidance_scale=3.5,
-                api_name="/process"
+                input_image=handle_file(str(temp_img_path).replace("\\","/")),
+                prompt=change_prompt,
+                seed=0,
+                randomize_seed=True,
+                guidance_scale=2.5,
+                steps=28,
+                api_name="/infer"
             )
             # The response from Gradio Client is a URL or path to the generated image
+            response = response[0]
             if isinstance(response, str) and (response.startswith("http://") or response.startswith("https://")):
                 # Download the image from the URL
                 resp = requests.get(response)
@@ -1165,7 +968,7 @@ def register(mcp):
                 "error": f"Inpainting failed: {e}"
             }
 
-        # 8. Save result and open in Photoshop as new document
+        # Save result and open in Photoshop as new document
         try:
             result_path = os.path.join(temp_dir, "detect_inpaint_result.png")
             result.save(result_path)
@@ -1184,11 +987,11 @@ def register(mcp):
             "success": True,
             "message": "Region detected, inpainted, and result opened in Photoshop.",
             "result_path": result_path,
-            "used_prompt": full_prompt
+            "used_prompt": change_prompt
         }
 
     # Register the tool
-    tool_name = register_tool(mcp, detect_region_generative_fill, "detect_region_generative_fill")
+    tool_name = register_tool(mcp, generative_fill_without_region, "generative_fill_without_region")
     registered_tools.append(tool_name)
 
     def select_layer(layer_name: str) -> dict:
@@ -2125,7 +1928,6 @@ def register(mcp):
             return {"success": False, "error": f"Error processing points: {e}"}
 
         js_points = ",".join(str(p) for p in flat_points)
-        logger.info(f"Spot healing polygon points: {js_points}")
         js_script = f"""
         try {{
             var doc = app.activeDocument;
