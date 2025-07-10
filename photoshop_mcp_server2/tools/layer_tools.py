@@ -40,6 +40,8 @@ os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 import huggingface_hub
 huggingface_hub.login(token=os.getenv("HF_TOKEN"))
 
+created_files = [] # List to keep track of created files
+
 def register(mcp):
     """Register layer-related tools.
 
@@ -658,18 +660,30 @@ def register(mcp):
             dict: Result of the operation.
         """
 
-        # 1. Download current PSD as image (PNG)
-        try:
+        temp_dir = tempfile.gettempdir()
+        base_name = "ps_active_doc_for_inpaint"
+        ext = ".png"
+        idx = 1
+        temp_img_path = os.path.join(temp_dir, f"{base_name}{ext}")
+        # Find a non-existing filename for saving
+        while os.path.exists(temp_img_path):
+            idx += 1
+            temp_img_path = os.path.join(temp_dir, f"{base_name}_{idx}{ext}")
 
+        # Find the last existing file for opening
+        open_idx = idx - 1
+        open_img_path = os.path.join(temp_dir, f"{base_name}{ext}") if open_idx == 1 else os.path.join(temp_dir, f"{base_name}_{open_idx}{ext}")
+        if not os.path.exists(open_img_path):
+            open_img_path = None
+
+        try:
             pythoncom.CoInitialize()
             app = win32com.client.Dispatch("Photoshop.Application")
             doc = app.ActiveDocument
 
-            temp_dir = tempfile.gettempdir()
-            temp_img_path = os.path.join(temp_dir, "ps_active_doc_for_inpaint.png")
-
             options = win32com.client.Dispatch("Photoshop.PNGSaveOptions")
             doc.SaveAs(temp_img_path, options, True)
+            created_files.append(temp_img_path)
         except Exception as e:
             return {
                 "success": False,
@@ -695,8 +709,6 @@ def register(mcp):
 
         # 3. Get image description using LangChain, ChatGroq, and Llama-4
         try:
-
-            # Convert image and mask to base64
             def pil_to_base64(img):
                 img = img.resize((300,300)) # Resize for faster processing
                 buffered = BytesIO()
@@ -706,7 +718,6 @@ def register(mcp):
             image_b64 = pil_to_base64(image)
             mask_b64 = pil_to_base64(mask)
 
-            # Compose prompt template with examples
             prompt_template = f"""
             You are an expert Photoshop assistant. Given an image (base64 PNG), 
             a mask (base64 PNG, white region is the area to edit), and an inpaint prompt, 
@@ -784,7 +795,6 @@ def register(mcp):
             full_prompt:
             """
 
-            # Call ChatGroq with Llama-4
             messages = [
                 (
                     "user",
@@ -809,24 +819,20 @@ def register(mcp):
                 }
             )
 
-            # Extract the full prompt from the response
             logger.info(f"LLM response: {response.content}")
             full_prompt = response.content.strip()
             if full_prompt.startswith('"') and full_prompt.endswith('"'):
                 full_prompt = full_prompt[1:-1]
         except Exception as e:
-            # If LLM fails, fallback to original prompt
             logger.error(f"LLM failed: {e}")
             full_prompt = inpaint_prompt
 
-        # 4. Inpaint with Hugging Face API
         try:
             client = Client("ameerazam08/FLUX.1-dev-Inpainting-Model-Beta-GPU", hf_token=os.getenv("HF_TOKEN"))
-            # Save mask as PNG in temp_dir
             mask_path = os.path.join(temp_dir, "ps_mask_for_inpaint.png")
             mask.save(mask_path)
+            created_files.append(mask_path)
 
-            # Create a new image: copy of original, but white where mask is white
             combined = image.copy()
             mask_np = np.array(mask)
             combined_np = np.array(combined)
@@ -835,6 +841,7 @@ def register(mcp):
             combined_img = Image.fromarray(combined_np)
             combined_path = os.path.join(temp_dir, "ps_combined_for_inpaint.png")
             combined_img.save(combined_path)
+            created_files.append(combined_path)
 
             response = client.predict(
                 input_image_editor={"background":handle_file(str(temp_img_path).replace("\\","/")),"layers":[handle_file(str(mask_path).replace("\\","/"))],"composite":handle_file(str(combined_path).replace("\\","/"))},
@@ -847,15 +854,12 @@ def register(mcp):
                 true_guidance_scale=3.5,
                 api_name="/process",
             )
-            # The response from Gradio Client is a URL or path to the generated image
             if isinstance(response, str) and (response.startswith("http://") or response.startswith("https://")):
-                # Download the image from the URL
                 resp = requests.get(response)
                 result = Image.open(BytesIO(resp.content)).convert("RGB")
             elif isinstance(response, str) and os.path.exists(response):
                 result = Image.open(response).convert("RGB")
             elif isinstance(response, dict) and "output" in response:
-                # Some Gradio APIs return a dict with 'output'
                 output = response["output"]
                 if isinstance(output, str) and (output.startswith("http://") or output.startswith("https://")):
                     resp = requests.get(output)
@@ -872,12 +876,15 @@ def register(mcp):
                 "error": f"Inpainting failed: {e}"
             }
 
-        # 5. Save result and open in Photoshop as new document
         try:
             result_path = os.path.join(temp_dir, "inpaint_result.png")
+            idx = 1
+            while os.path.exists(result_path):
+                idx += 1
+                result_path = os.path.join(temp_dir, f"inpaint_result_{idx}.png")
             result.save(result_path)
+            created_files.append(result_path)
 
-            # Open in Photoshop as new document
             pythoncom.CoInitialize()
             app = win32com.client.Dispatch("Photoshop.Application")
             app.Open(result_path)
@@ -918,9 +925,14 @@ def register(mcp):
 
             temp_dir = tempfile.gettempdir()
             temp_img_path = os.path.join(temp_dir, "ps_active_doc_for_detect_inpaint.png")
+            idx = 1
+            while os.path.exists(temp_img_path):
+                idx += 1
+                temp_img_path = os.path.join(temp_dir, f"ps_active_doc_for_detect_inpaint_{idx}.png")
 
             options = win32com.client.Dispatch("Photoshop.PNGSaveOptions")
             doc.SaveAs(temp_img_path, options, True)
+            created_files.append(temp_img_path)
         except Exception as e:
             return {
                 "success": False,
@@ -971,7 +983,12 @@ def register(mcp):
         # Save result and open in Photoshop as new document
         try:
             result_path = os.path.join(temp_dir, "detect_inpaint_result.png")
+            idx = 1
+            while os.path.exists(result_path):
+                idx += 1
+                result_path = os.path.join(temp_dir, f"detect_inpaint_result_{idx}.png")
             result.save(result_path)
+            created_files.append(result_path)
 
             # Open in Photoshop as new document
             pythoncom.CoInitialize()
@@ -2937,5 +2954,31 @@ def register(mcp):
     # Register the generative_expand function
     tool_name = register_tool(mcp, generative_expand, "generative_expand")
     registered_tools.append(tool_name)
+
+    def clear_created_files() -> dict:
+        """
+        Clears Files created in using previous tools.
+        Returns:
+            dict: Result of the operation.
+        """
+        for f in created_files:
+            try:
+                if os.path.exists(f):
+                    os.remove(f)
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": f"Failed to delete file {f}: {str(e)}"
+                }
+        created_files.clear()
+        return {
+            "success": True,
+            "message": "All created files cleared."
+        }
+    
+    # Register the clear_created_files function
+    tool_name = register_tool(mcp, clear_created_files, "clear_created_files")
+    registered_tools.append(tool_name)
+    
     # Return the list of registered tools
     return registered_tools

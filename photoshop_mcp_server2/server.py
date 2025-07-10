@@ -5,7 +5,10 @@ import os
 import sys
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
+from fastmcp.server.middleware import Middleware, MiddlewareContext
+from fastmcp.client import Client
+import asyncio
 
 # Import registry
 from photoshop_mcp_server2.registry import register_all_resources, register_all_tools
@@ -51,8 +54,18 @@ def create_server(
         set that new document as the active document.
         6. Always clarify what and how to use the tools and resources provided by the MCP server.
         7. Run photoshop_generative_expand only once. Dont run it twice unnecessarily.
+        8. Check your work with screenshot_current_document tool while perform operations on layers.
+        Adjust positions, sizes, and other properties of layers as needed to achieve the desired result.
+        9. Always flatten the document before saving it / after completing the work to ensure all layers are merged.
     """
-    server_mcp = FastMCP(name=name, description=description, instructions=instructions)
+    server_mcp = FastMCP(name=name, instructions=instructions)
+
+    class SessionMiddleware(Middleware):
+        async def on_list_tools(self, context: MiddlewareContext, call_next: Any) -> Any:
+            logger.info("Adding instructions to context")
+            await context.fastmcp_context.info('Instructions to be followed in using this server: '+instructions)
+            return await super().on_list_tools(context, call_next)
+    server_mcp.add_middleware(SessionMiddleware())
 
     # Register all resources dynamically
     logger.info("Registering resources...")
@@ -118,7 +131,7 @@ def main():
         server_mcp = create_server(
             name=args.name, description=args.description
         )
-        server_mcp.run()
+        server_mcp.run(transport='stdio')
     except Exception as e:
         logger.error(f"Error starting server: {e}")
         sys.exit(1)

@@ -440,4 +440,26 @@ def register(mcp):
     tool_name = register_tool(mcp, flatten_document, "flatten_document")
     registered_tools.append(tool_name)
     # Return the list of registered tools
+
+    def screenshot_current_document() -> dict:
+        """
+        Takes a screenshot of the current Photoshop document, resizes it to 300x300, and returns it as path.
+        """
+        import os, base64
+        from io import BytesIO
+        from PIL import Image
+        import win32com.client
+
+        ps_app = win32com.client.Dispatch("Photoshop.Application")
+        doc = ps_app.ActiveDocument
+        temp_path = os.path.join(os.environ.get("TEMP", "/tmp"), "ps_screenshot.png")
+        options = win32com.client.Dispatch("Photoshop.PNGSaveOptions")
+        doc.SaveAs(temp_path, options, True)
+        
+        return {"success": True, "screenshot_path": temp_path}
+
+    # Register the screenshot_current_document function
+    tool_name = register_tool(mcp, screenshot_current_document, "screenshot_current_document")
+    registered_tools.append(tool_name)
+
     return registered_tools

@@ -12,7 +12,7 @@ def register(mcp):
     """
     registered_resources = []
 
-    @mcp.resource("photoshop://info")
+    
     def get_photoshop_info() -> dict:
         """Get information about the Photoshop application.
 
@@ -28,7 +28,7 @@ def register(mcp):
     resource_name = register_resource(mcp, get_photoshop_info, "photoshop://info")
     registered_resources.append(resource_name)
 
-    @mcp.resource("photoshop://document/info")
+    
     def get_document_info() -> dict:
         """Get information about the active document.
 
@@ -51,7 +51,7 @@ def register(mcp):
     resource_name = register_resource(mcp, get_document_info, "photoshop://document/info")
     registered_resources.append(resource_name)
 
-    @mcp.resource("photoshop://document/layers")
+    
     def get_layers() -> dict:
         """Get information about the layers in the active document.
 
