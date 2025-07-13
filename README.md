@@ -14,12 +14,15 @@ This a MCP Server built to automate all the actions that can be performed with p
 
 - 1. Perform edits on images with commands from a mcp client without using tools.
 
+https://github.com/user-attachments/assets/ffe3b026-ff8a-46c5-8836-79fb485771af
 
 - 2. Generate an Instagram post with description and commands from a mcp client.
 
+https://github.com/user-attachments/assets/c872581e-f793-4cad-925e-8d963be14a68
 
 - 3. Add and edit pieces of images with commands from a mcp client.
 
+https://github.com/user-attachments/assets/c8d16d6b-80af-44fe-9504-159caf2e55fc
 
 ### Tools
 
@@ -248,9 +251,9 @@ VS Code MCP Config
                 "absolute/path/to/photoshop_mcp_server2/server.py"
             ],
             "env": {
-				"PS_VERSION": "2024"
-			},
-			"type": "stdio"
+		"PS_VERSION": "2024"
+	    },
+           "type": "stdio"
         }
     }
 }
