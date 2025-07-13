@@ -37,6 +37,7 @@ import requests
 import win32com.client
 load_dotenv(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.env")))
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
+os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
 import huggingface_hub
 huggingface_hub.login(token=os.getenv("HF_TOKEN"))
 
@@ -1454,7 +1455,7 @@ def register(mcp):
             layer_name (str): The name of the layer to reposition.
             x (float, optional): New x coordinate (for text or smart object layers).
             y (float, optional): New y coordinate (for text or smart object layers).
-            z_index (int, optional): New z-index (stack order, 0 = bottom).
+            z_index (int, optional): New z-index (stack order, 0 = top).
 
         Returns:
             dict: Result of the operation.
@@ -2635,7 +2636,13 @@ def register(mcp):
 
             # Save current document as PNG
             temp_dir = tempfile.gettempdir()
+
             temp_path = os.path.join(temp_dir, "ps_active_doc_for_expand.png")
+            idx = 1
+            while os.path.exists(temp_path):
+                idx += 1
+                temp_path = os.path.join(temp_dir, f"ps_active_doc_for_expand_{idx}.png")
+
             options = win32com.client.Dispatch("Photoshop.PNGSaveOptions")
             doc.SaveAs(temp_path, options, True)
 
@@ -2661,6 +2668,12 @@ def register(mcp):
 
             # Save expanded image
             expanded_path = os.path.join(temp_dir, "ps_expanded_doc.png")
+
+            idx = 1
+            while os.path.exists(expanded_path):
+                idx += 1
+                expanded_path = os.path.join(temp_dir, f"ps_expanded_doc_{idx}.png")
+
             new_img.save(expanded_path)
 
             # Open in Photoshop as new document
@@ -2707,6 +2720,12 @@ def register(mcp):
             # Save current document as PNG
             temp_dir = tempfile.gettempdir()
             temp_path = os.path.join(temp_dir, "ps_active_doc_for_expand.png")
+
+            idx = 1
+            while os.path.exists(temp_path):
+                idx += 1
+                temp_path = os.path.join(temp_dir, f"ps_active_doc_for_expand_{idx}.png")
+            
             options = win32com.client.Dispatch("Photoshop.PNGSaveOptions")
             doc.SaveAs(temp_path, options, True)
 
@@ -2732,6 +2751,12 @@ def register(mcp):
 
             # Save expanded image
             expanded_path = os.path.join(temp_dir, "ps_expanded_doc.png")
+
+            idx = 1
+            while os.path.exists(expanded_path):
+                idx += 1
+                expanded_path = os.path.join(temp_dir, f"ps_expanded_doc_{idx}.png")
+
             new_img.save(expanded_path)
 
             # Open in Photoshop as new document and set as active
@@ -2755,19 +2780,7 @@ def register(mcp):
 
             image_b64 = pil_to_base64(new_img.convert("RGB"))
             mask_b64 = pil_to_base64(mask)
-            # Show image_b64 and mask_b64 using cv2 for debugging
 
-            def show_base64_image(b64_str, window_name="Image"):
-                img_bytes = base64.b64decode(b64_str)
-                nparr = np.frombuffer(img_bytes, np.uint8)
-                img = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
-                if img is not None:
-                    cv2.imshow(window_name, img)
-                    cv2.waitKey(0)
-                    cv2.destroyAllWindows()
-
-            show_base64_image(image_b64, "Expanded Image")
-            show_base64_image(mask_b64, "Expanded Mask")
             # Compose prompt template with examples
             prompt_template = f"""
             You are an expert Photoshop assistant. Given an image (base64 PNG), 
@@ -2927,6 +2940,10 @@ def register(mcp):
 
             # 5. Save result and open in Photoshop as new document
             result_path = os.path.join(temp_dir, "inpaint_result.png")
+            idx = 1
+            while os.path.exists(result_path):
+                idx += 1
+                result_path = os.path.join(temp_dir, f"inpaint_result_{idx}.png")
             result.save(result_path)
 
             # Open in Photoshop as new document
